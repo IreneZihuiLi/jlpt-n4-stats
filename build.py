@@ -1,8 +1,41 @@
-import json, os
+"""Build the mobile page from data.json.  Usage: python3 -I build.py
+Outputs: <lv>_page.html (Artifact body, no skeleton), <LV>高频词汇与考点统计.html and index.html (standalone)."""
+import json, os, math
 data = json.load(open("data.json", encoding="utf-8"))
-payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+lv = data.get("_level", "N4")
 
-TEMPLATE = r'''<title>N4 高频词汇与考点</title>
+def rows(name): return data[name]["rows"] if name in data else []
+def thirds(m):
+    c = sorted(set([max(2, math.ceil(m/3)), max(2, math.ceil(2*m/3)), m]))
+    return c
+
+# session counts: 笔试 = rows in 统计范围; 听力 = sessions with listening material; 旧题 = max frequency in that sheet
+scope = rows("统计范围")
+def maxfreq(name): return max([int(r["考试频次"]) for r in rows(name)] or [1])
+def included(r, key): return "不纳入" not in str(r.get(key, "")) and "未找到" not in str(r.get(key, ""))
+bishi_n = max(sum(1 for r in scope if included(r, "笔试材料")), maxfreq("笔试高频词汇"))
+choukai_n = max(sum(1 for r in scope if included(r, "听力文字原文")), maxfreq("听力高频词汇"))
+kyuu_n = maxfreq("旧题词汇参考")
+
+TABS = [
+  {"id":"bishi-goi",      "sheet":"笔试高频词汇", "label":"笔试词汇", "kind":"vocab",   "max":bishi_n,   "freqChips":thirds(bishi_n)},
+  {"id":"bishi-bunpo",    "sheet":"笔试语法考点", "label":"笔试语法", "kind":"grammar", "max":bishi_n,   "freqChips":[2,3,4]},
+  {"id":"bunpo-mondai",   "sheet":"语法逐题明细", "label":"语法逐题", "kind":"gq"},
+  {"id":"choukai-goi",    "sheet":"听力高频词汇", "label":"听力词汇", "kind":"vocab",   "max":choukai_n, "freqChips":thirds(choukai_n)},
+  {"id":"choukai-kouten", "sheet":"听力考点统计", "label":"听力考点", "kind":"lpoint",  "max":choukai_n, "freqChips":thirds(choukai_n)},
+  {"id":"choukai-mondai", "sheet":"听力逐题明细", "label":"听力逐题", "kind":"lq"},
+  {"id":"choukai-hyougen","sheet":"听力语法表达", "label":"听力表达", "kind":"lexpr",   "max":choukai_n, "freqChips":thirds(choukai_n)},
+  {"id":"kyuu-goi",       "sheet":"旧题词汇参考", "label":"旧题词汇", "kind":"vocab",   "max":kyuu_n,    "freqChips":thirds(kyuu_n)},
+  {"id":"setsumei",       "label":"说明", "kind":"info"},
+]
+TABS = [t for t in TABS if t["kind"] == "info" or t.get("sheet") in data]
+print(f"{lv}: 笔试 {bishi_n} 场, 听力 {choukai_n} 场, 旧题 {kyuu_n} 场")
+
+payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+tabs_json = json.dumps(TABS, ensure_ascii=False)
+sub = f"{bishi_n}场新版{lv}真题统计 · 点卡片看例句"
+
+TEMPLATE = r'''<title>__LEVEL__ 高频词汇与考点</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@600&family=BIZ+UDPGothic:wght@400;700&display=swap">
 <style>
@@ -37,7 +70,6 @@ button{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 .search input{width:100%;height:38px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--fg);padding:0 36px 0 12px;font:inherit;font-size:15px;-webkit-appearance:none;appearance:none}
 .search input:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .search input::-webkit-search-cancel-button,.search input::-webkit-search-decoration{-webkit-appearance:none;display:none}
-.empty .link{border:0;background:var(--accent-soft);color:var(--accent);font:inherit;font-size:13px;border-radius:999px;padding:4px 10px;margin:4px 3px 0;cursor:pointer}
 .search .clr{position:absolute;right:4px;top:4px;height:30px;width:30px;border:0;background:transparent;color:var(--muted);font-size:20px;line-height:1;border-radius:8px;cursor:pointer}
 .tabs{display:flex;gap:2px;overflow-x:auto;scrollbar-width:none;margin-top:6px}
 .tabs::-webkit-scrollbar{display:none}
@@ -70,6 +102,8 @@ button{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 .segs{display:flex;gap:2px}
 .segs i{display:block;width:5px;height:10px;border-radius:1px;background:var(--seg)}
 .segs i.on{background:var(--accent)}
+.track{display:block;width:88px;height:8px;border-radius:4px;background:var(--seg);overflow:hidden}
+.track i{display:block;height:100%;background:var(--accent);border-radius:4px}
 .freq .n{font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
 .freq .n small{color:var(--muted);font-size:11px}
 .card-body{border-top:1px dashed var(--line);padding:10px 14px 12px;display:flex;flex-direction:column;gap:9px;font-size:14px}
@@ -87,7 +121,9 @@ mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
 .group-h{font-size:13px;color:var(--muted);margin-top:10px;display:flex;gap:8px;align-items:baseline}
 .group-h b{color:var(--fg);font-size:15px}
 .group-h:first-child{margin-top:0}
+.more{border:1px solid var(--line);background:var(--surface);color:var(--accent);font:inherit;font-size:14px;border-radius:10px;padding:11px;cursor:pointer}
 .empty{text-align:center;color:var(--muted);padding:48px 0;font-size:14px}
+.empty .link{border:0;background:var(--accent-soft);color:var(--accent);font:inherit;font-size:13px;border-radius:999px;padding:4px 10px;margin:4px 3px 0;cursor:pointer}
 .info h2{font-size:16px;margin:18px 0 8px}
 .info h2:first-child{margin-top:4px}
 .info p.lead{margin:0 0 8px;color:var(--muted);font-size:13px}
@@ -113,8 +149,8 @@ tr:last-child td{border-bottom:0}
 <header class="top">
   <div class="wrap">
     <div class="brand">
-      <h1>N4 高频词汇与考点</h1>
-      <span class="sub">13场新版N4真题统计 · 点卡片看例句</span>
+      <h1>__LEVEL__ 高频词汇与考点</h1>
+      <span class="sub">__SUB__</span>
     </div>
     <div class="search">
       <input id="q" type="search" placeholder="搜索日语 / 读音 / 中文 / 考点…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="搜索">
@@ -136,19 +172,9 @@ tr:last-child td{border-bottom:0}
 (function(){
 'use strict';
 var DATA = JSON.parse(document.getElementById('n4-data').textContent);
-
-var TABS = [
-  {id:'bishi-goi',      sheet:'笔试高频词汇', label:'笔试词汇', kind:'vocab',   max:13, freqChips:[5,8,11]},
-  {id:'bishi-bunpo',    sheet:'笔试语法考点', label:'笔试语法', kind:'grammar', max:13, freqChips:[2,3,4]},
-  {id:'bunpo-mondai',   sheet:'语法逐题明细', label:'语法逐题', kind:'gq'},
-  {id:'choukai-goi',    sheet:'听力高频词汇', label:'听力词汇', kind:'vocab',   max:9,  freqChips:[5,7,9]},
-  {id:'choukai-kouten', sheet:'听力考点统计', label:'听力考点', kind:'lpoint',  max:9,  freqChips:[3,6,9]},
-  {id:'choukai-mondai', sheet:'听力逐题明细', label:'听力逐题', kind:'lq'},
-  {id:'choukai-hyougen',sheet:'听力语法表达', label:'听力表达', kind:'lexpr',   max:9,  freqChips:[6,8,9]},
-  {id:'kyuu-goi',       sheet:'旧题词汇参考', label:'旧题词汇', kind:'vocab',   max:9,  freqChips:[5,7,9]},
-  {id:'setsumei',       label:'说明', kind:'info'}
-];
-var POS_ORDER = ['名词','动词','形容词','形容动词','副词','时间','疑问词','表达'];
+var TABS = __TABS__;
+var POS_ORDER = ['名词','动词','形容词','形容动词','副词','时间','疑问词','表达','词汇'];
+var CHUNK = 400;
 
 var state = { tab: TABS[0].id, q: '', f: {} };
 TABS.forEach(function(t){ state.f[t.id] = {pos:'全部', min:0, sort:'freq', year:'全部', point:'全部'}; });
@@ -163,10 +189,15 @@ function hl(s){
   var re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'), 'gi');
   return t.replace(re, function(m){ return '<mark>'+m+'</mark>'; });
 }
+function pick(r){ for(var i=1;i<arguments.length;i++){ if(r[arguments[i]]!=null) return r[arguments[i]]; } return ''; }
 function fmtYM(s){ s=String(s).trim(); return /^\d{6}$/.test(s) ? s.slice(0,4)+'/'+s.slice(4) : s; }
 function splitDates(s){ return String(s||'').split(/[、，,\s]+/).filter(Boolean); }
 function datesHtml(s){ return '<div class="dates">'+splitDates(s).map(function(d){ return '<span>'+esc(fmtYM(d))+'</span>'; }).join('')+'</div>'; }
-function segs(n, max){ var h='<span class="segs" aria-hidden="true">'; for(var i=0;i<max;i++){ h+='<i'+(i<n?' class="on"':'')+'></i>'; } return h+'</span>'; }
+function segs(n, max){
+  if(max<=16){ var h='<span class="segs" aria-hidden="true">'; for(var i=0;i<max;i++){ h+='<i'+(i<n?' class="on"':'')+'></i>'; } return h+'</span>'; }
+  var pct = Math.max(0, Math.min(100, n/max*100));
+  return '<span class="track" aria-hidden="true"><i style="width:'+pct.toFixed(1)+'%"></i></span>';
+}
 function freqBox(n, max, extra){ return '<div class="freq" title="出现过的考试场次">'+segs(+n,max)+'<span class="n">'+esc(n)+'<small>/'+max+'场'+(extra?' · '+esc(extra):'')+'</small></span></div>'; }
 function row(k, inner){ return inner ? '<div class="row"><span class="k">'+k+'</span>'+inner+'</div>' : ''; }
 function tabById(id){ for(var i=0;i<TABS.length;i++) if(TABS[i].id===id) return TABS[i]; return null; }
@@ -222,16 +253,19 @@ function noteHtml(t){
   var sub = DATA[t.sheet].subtitle || '';
   return '<div class="note">'+sub.split('｜').map(function(s){ return '<span>'+esc(s)+'</span>'; }).join('')+'</div>';
 }
+function freqChipsRow(t, st){
+  return chipsRow('频次', chip('全部', st.min===0, 'data-min="0"') + t.freqChips.map(function(n){ return chip('≥'+n+'场', st.min===n, 'data-min="'+n+'"'); }).join(''));
+}
 function renderFilters(t){
   var st = state.f[t.id], h = '';
   if(t.kind==='vocab'){
     var cnt = {}; rowsOf(t).forEach(function(r){ var p=r['词性／类别']; cnt[p]=(cnt[p]||0)+1; });
-    var poss = POS_ORDER.filter(function(p){ return cnt[p]; });
+    var poss = POS_ORDER.filter(function(p){ return cnt[p]; }).concat(Object.keys(cnt).filter(function(p){ return POS_ORDER.indexOf(p)<0; }));
     h += chipsRow('词性', chip('全部', st.pos==='全部', 'data-pos="全部"', rowsOf(t).length) + poss.map(function(p){ return chip(p, st.pos===p, 'data-pos="'+esc(p)+'"', cnt[p]); }).join(''));
-    h += chipsRow('频次', chip('全部', st.min===0, 'data-min="0"') + t.freqChips.map(function(n){ return chip('≥'+n+'场', st.min===n, 'data-min="'+n+'"'); }).join(''));
+    h += freqChipsRow(t, st);
     h += chipsRow('排序', chip('按频次', st.sort==='freq', 'data-sort="freq"') + chip('按词性分组', st.sort==='pos', 'data-sort="pos"') + chip('五十音', st.sort==='kana', 'data-sort="kana"'));
   } else if(t.kind==='grammar'||t.kind==='lpoint'||t.kind==='lexpr'){
-    h += chipsRow('频次', chip('全部', st.min===0, 'data-min="0"') + t.freqChips.map(function(n){ return chip('≥'+n+'场', st.min===n, 'data-min="'+n+'"'); }).join(''));
+    h += freqChipsRow(t, st);
   } else if(t.kind==='gq'||t.kind==='lq'){
     var ys = []; var yc = {}; rowsOf(t).forEach(function(r){ var y=String(r['考试年月']); if(!yc[y]){ yc[y]=0; ys.push(y);} yc[y]++; });
     h += chipsRow('考试', chip('全部', st.year==='全部', 'data-year="全部"') + ys.map(function(y){ return chip(fmtYM(y), st.year===y, 'data-year="'+y+'"', yc[y]); }).join(''));
@@ -260,16 +294,17 @@ function vocabCard(r, t){
   return cardOpen(head, body);
 }
 function grammarCard(r, t){
+  var cnt = pick(r, '题目数', '已归类条目数');
   var head = '<div class="hw"><span class="ttl" lang="ja">'+hl(r['日语考点'])+'</span></div>'
-    + freqBox(r['考试频次'], t.max, r['题目数']+'题')
+    + freqBox(r['考试频次'], t.max, cnt!=='' ? cnt+'题' : '')
     + '<div class="desc zh">'+hl(r['中文说明／考查用法'])+'</div>';
   var body = row('出现考试', datesHtml(r['出现考试年月']))
-    + row('示例题号', '<span class="src">'+esc(r['示例题号'])+'</span>')
+    + row('示例题号', '<span class="src">'+esc(pick(r,'示例题号','示例编号'))+'</span>')
     + row('题目摘录', '<blockquote lang="ja">'+hl(r['题目摘录'])+'</blockquote>');
   return cardOpen(head, body);
 }
 function gqCard(r){
-  var head = '<div class="hw"><span class="eyebrow">'+esc(fmtYM(r['考试年月']))+' · '+esc(r['题号'])+'</span><span class="ttl" lang="ja">'+hl(r['日语考点'])+'</span></div><div></div>'
+  var head = '<div class="hw"><span class="eyebrow">'+esc(fmtYM(r['考试年月']))+' · '+esc(pick(r,'题号','编号'))+'</span><span class="ttl" lang="ja">'+hl(r['日语考点'])+'</span></div><div></div>'
     + '<div class="desc zh">'+hl(r['中文解释'])+'</div>';
   var body = row('题目摘录', '<blockquote lang="ja">'+hl(r['题目摘录'])+'</blockquote>')
     + row('识别依据', '<span class="src">'+esc(r['识别依据／状态'])+'</span>')
@@ -277,7 +312,7 @@ function gqCard(r){
   return cardOpen(head, body);
 }
 function lqCard(r){
-  var head = '<div class="hw"><span class="eyebrow">'+esc(fmtYM(r['考试年月']))+' · '+esc(r['题号'])+'</span><span class="ttl">'+hl(r['考点'])+'</span></div><div></div>'
+  var head = '<div class="hw"><span class="eyebrow">'+esc(fmtYM(r['考试年月']))+' · '+esc(pick(r,'题号','编号'))+'</span><span class="ttl">'+hl(r['考点'])+'</span></div><div></div>'
     + '<div class="desc jp-text" lang="ja">'+hl(r['提问摘录'])+'</div>';
   var body = row('解题关注点', '<span class="zh">'+hl(r['解题关注点'])+'</span>')
     + row('对话摘录', '<blockquote lang="ja">'+hl(r['对话摘录'])+'</blockquote>')
@@ -286,11 +321,12 @@ function lqCard(r){
   return cardOpen(head, body);
 }
 function lpointCard(r, t){
+  var cnt = pick(r, '题目数', '材料段／提问数');
   var head = '<div class="hw"><span class="ttl">'+hl(r['考点'])+'</span></div>'
-    + freqBox(r['考试频次'], t.max, r['题目数']+'题')
+    + freqBox(r['考试频次'], t.max, cnt!=='' ? cnt+'条' : '')
     + '<div class="desc zh">'+hl(r['解题关注点'])+'</div>';
   var body = row('出现考试', datesHtml(r['出现考试年月']))
-    + row('示例题号', '<span class="src">'+esc(r['示例题号'])+'</span>');
+    + row('示例题号', '<span class="src">'+esc(pick(r,'示例题号','示例编号'))+'</span>');
   return cardOpen(head, body);
 }
 function lexprCard(r, t){
@@ -304,11 +340,20 @@ function lexprCard(r, t){
 }
 var CARD = {vocab:vocabCard, grammar:grammarCard, gq:gqCard, lq:lqCard, lpoint:lpointCard, lexpr:lexprCard};
 
+var pendingItems = [];
+function moreBtn(){ return pendingItems.length ? '<button class="more" type="button" data-more>显示更多（还有 '+pendingItems.length+' 条）</button>' : ''; }
+function appendChunk(){
+  var btn = elList.querySelector('[data-more]');
+  var part = pendingItems.splice(0, CHUNK).join('');
+  if(btn){ btn.insertAdjacentHTML('beforebegin', part); btn.remove(); if(pendingItems.length) elList.insertAdjacentHTML('beforeend', moreBtn()); }
+  else { elList.innerHTML = part + moreBtn(); }
+}
 function renderList(t){
   if(t.kind==='info'){ renderInfo(); return; }
   var rows = filtered(t), total = rowsOf(t).length, st = state.f[t.id];
   elBar.innerHTML = '<span>'+(rows.length===total ? '共 '+total+' 条' : '显示 '+rows.length+' / '+total+' 条')+'</span>'
     + (rows.length ? '<span><button type="button" data-expand="1">全部展开</button><button type="button" data-expand="0">收起</button></span>' : '');
+  pendingItems = [];
   if(!rows.length){
     var others = state.q.trim() ? TABS.filter(function(o){ return o.kind!=='info' && o.id!==t.id && countQ(o)>0; }) : [];
     elList.innerHTML = '<div class="empty">没有匹配的条目。试试换个关键词或放宽筛选。'
@@ -316,33 +361,33 @@ function renderList(t){
       + '</div>';
     return;
   }
-  var h = '';
   if(t.kind==='vocab' && st.sort==='pos'){
     var groups = {}; rows.forEach(function(x){ var p=x.r['词性／类别']; (groups[p]=groups[p]||[]).push(x); });
     POS_ORDER.concat(Object.keys(groups).filter(function(p){ return POS_ORDER.indexOf(p)<0; })).forEach(function(p){
       if(!groups[p]) return;
-      h += '<div class="group-h"><b>'+esc(p)+'</b><span>'+groups[p].length+' 个</span></div>';
-      h += groups[p].map(function(x){ return vocabCard(x.r, t); }).join('');
+      pendingItems.push('<div class="group-h"><b>'+esc(p)+'</b><span>'+groups[p].length+' 个</span></div>');
+      groups[p].forEach(function(x){ pendingItems.push(vocabCard(x.r, t)); });
     });
   } else {
     var fn = CARD[t.kind];
-    h = rows.map(function(x){ return fn(x.r, t); }).join('');
+    rows.forEach(function(x){ pendingItems.push(fn(x.r, t)); });
   }
-  elList.innerHTML = h;
+  elList.innerHTML = '';
+  appendChunk();
 }
 
 function renderInfo(){
   var sc = DATA['统计范围'], kj = DATA['统计口径'], ly = DATA['材料来源'];
   elBar.innerHTML = '';
   var h = '<div class="info">';
-  h += '<h2>统计口径</h2><p class="lead">'+esc(kj.subtitle)+'</p><div class="kv">'
+  if(kj) h += '<h2>统计口径</h2><p class="lead">'+esc(kj.subtitle)+'</p><div class="kv">'
     + kj.rows.map(function(r){ return '<div class="it"><b>'+esc(r['项目'])+'</b><span class="zh">'+esc(r['说明'])+'</span></div>'; }).join('') + '</div>';
-  h += '<h2>统计范围</h2><p class="lead">'+esc(sc.subtitle)+'</p><div class="tbl"><table><thead><tr>'
+  if(sc) h += '<h2>统计范围</h2><p class="lead">'+esc(sc.subtitle)+'</p><div class="tbl"><table><thead><tr>'
     + sc.headers.map(function(x){ return '<th>'+esc(x)+'</th>'; }).join('') + '</tr></thead><tbody>'
     + sc.rows.map(function(r){ return '<tr>'+sc.headers.map(function(k,i){ return '<td>'+esc(i===0?fmtYM(r[k]):r[k])+'</td>'; }).join('')+'</tr>'; }).join('')
     + '</tbody></table></div>';
-  h += '<h2>材料来源</h2><p class="lead">'+esc(ly.subtitle)+'</p><div class="srcs">'
-    + ly.rows.map(function(r){ return '<div class="it"><span class="ym">'+esc(fmtYM(r['考试年月']))+'</span><span class="u">'+esc(r['用途'])+'</span><span class="f">'+esc(r['文件名'])+' · 第 '+esc(r['页码范围'])+' 页</span><span class="d zh">'+esc(r['计数说明'])+'</span></div>'; }).join('')
+  if(ly) h += '<h2>材料来源</h2><p class="lead">'+esc(ly.subtitle)+'</p><div class="srcs">'
+    + ly.rows.map(function(r){ return '<div class="it"><span class="ym">'+esc(fmtYM(r['考试年月']))+'</span><span class="u">'+esc(r['用途'])+'</span><span class="f">'+esc(r['文件名'])+(r['页码范围']!=null?' · 第 '+esc(r['页码范围'])+' 页':'')+'</span><span class="d zh">'+esc(r['计数说明'])+'</span></div>'; }).join('')
     + '</div>';
   h += '</div>';
   elList.innerHTML = h;
@@ -357,7 +402,7 @@ function render(){
 function goTab(id){
   if(!tabById(id) || state.tab===id) return;
   state.tab = id;
-  try{ localStorage.setItem('n4tab', state.tab); }catch(err){}
+  try{ localStorage.setItem('jlpt-tab', state.tab); }catch(err){}
   if(location.hash !== '#'+state.tab) location.hash = state.tab;
   render();
   window.scrollTo(0,0);
@@ -382,6 +427,7 @@ elFilters.addEventListener('click', function(e){
 });
 elList.addEventListener('click', function(e){
   var g = e.target.closest('[data-goto]'); if(g){ goTab(g.dataset.goto); return; }
+  if(e.target.closest('[data-more]')){ appendChunk(); return; }
   var b = e.target.closest('.card-head'); if(!b) return;
   var open = b.getAttribute('aria-expanded')==='true';
   b.setAttribute('aria-expanded', String(!open));
@@ -395,7 +441,7 @@ elBar.addEventListener('click', function(e){
 var qTimer;
 elQ.addEventListener('input', function(){
   clearTimeout(qTimer);
-  qTimer = setTimeout(function(){ state.q = elQ.value; elClr.hidden = !state.q; render(); }, 120);
+  qTimer = setTimeout(function(){ state.q = elQ.value; elClr.hidden = !state.q; render(); }, 150);
 });
 elClr.addEventListener('click', function(){ elQ.value=''; state.q=''; elClr.hidden=true; render(); elQ.focus(); });
 elFab.addEventListener('click', function(){ window.scrollTo({top:0, behavior:'smooth'}); });
@@ -404,7 +450,7 @@ window.addEventListener('scroll', function(){ elFab.hidden = window.scrollY < 60
 /* ---------- boot ---------- */
 (function(){
   var id = location.hash.slice(1);
-  if(!tabById(id)){ try{ id = localStorage.getItem('n4tab'); }catch(err){ id=null; } }
+  if(!tabById(id)){ try{ id = localStorage.getItem('jlpt-tab'); }catch(err){ id=null; } }
   if(tabById(id)) state.tab = id;
   render();
 })();
@@ -412,12 +458,14 @@ window.addEventListener('scroll', function(){ elFab.hidden = window.scrollY < 60
 </script>
 '''
 
-page = TEMPLATE.replace("__DATA__", payload)
-open("n4_page.html", "w", encoding="utf-8").write(page)
+page = TEMPLATE.replace("__DATA__", payload).replace("__TABS__", tabs_json).replace("__LEVEL__", lv).replace("__SUB__", sub)
+body_name = f"{lv.lower()}_page.html"
+open(body_name, "w", encoding="utf-8").write(page)
 
 standalone = ('<!doctype html>\n<html lang="zh-CN">\n<head>\n<meta charset="utf-8">\n'
   '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
   '<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}img{max-width:100%}[hidden]{display:none!important}</style>\n'
   '</head>\n<body>\n' + page + '\n</body>\n</html>\n')
-open("N4高频词汇与考点统计.html", "w", encoding="utf-8").write(standalone)
-print("page bytes:", os.path.getsize("n4_page.html"), "standalone bytes:", os.path.getsize("N4高频词汇与考点统计.html"))
+for name in (f"{lv}高频词汇与考点统计.html", "index.html"):
+    open(name, "w", encoding="utf-8").write(standalone)
+print(f"{body_name}: {os.path.getsize(body_name)} bytes; index.html: {os.path.getsize('index.html')} bytes")
