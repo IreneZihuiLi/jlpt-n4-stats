@@ -1,6 +1,6 @@
 """Build the mobile page from data.json.  Usage: python3 -I build.py
 Outputs: <lv>_page.html (Artifact body, no skeleton), <LV>高频词汇与考点统计.html and index.html (standalone)."""
-import json, os, math
+import json, os, math, re
 data = json.load(open("data.json", encoding="utf-8"))
 lv = data.get("_level", "N4")
 
@@ -29,6 +29,76 @@ TABS = [
   {"id":"setsumei",       "label":"说明", "kind":"info"},
 ]
 TABS = [t for t in TABS if t["kind"] == "info" or t.get("sheet") in data]
+
+# ---------- optional practice module: quiz_src.txt (hand-curated 文法問題1 bank) ----------
+CATS = [
+  {"id":"juju",  "label":"授受动词",          "re":r"てくれ|てもら|てあげ|てやる",
+   "tip":"「〜てくれる」主语是别人（别人为我做）；「〜てもらう」主语是我（我请别人做）；「〜てあげる／やる」是我为别人做。先看括号前的动作是谁做的。"},
+  {"id":"joshi", "label":"助词 から・で",     "re":r"^(から|で)（|^から＋",
+   "tip":"来源、看不出原样的原料用「から」；原因、看得出的材料、完成所需的时间用「で」。"},
+  {"id":"ukemi", "label":"被动・使役",        "re":r"被动|使役",
+   "tip":"被动句先找「谁被怎么了」（が／は）；做动作的人用「に／によって」，来源用「から」，原因用「で」。使役句里被要求的人用「を／に」。"},
+  {"id":"koto",  "label":"こと句型",          "re":r"ことにする|ことになる|ことができる|ことがある",
+   "tip":"「ことにする」自己决定；「ことになる」被决定、事情定下来；「ことになっている」规定如此；「ことができる」能够；「たことがある」经历。"},
+  {"id":"suiryo","label":"推量・打算",        "re":r"つもり|でしょう|かもしれない|そうだ|意志形＋と思う|はず",
+   "tip":"「はず」是有依据的推断；「つもり」是本人的打算；「でしょう／かもしれない」是推测；「そうだ」（样态）是看起来要……。"},
+  {"id":"joken", "label":"条件 たら・なら・ても","re":r"〜たら|〜なら|〜ても（",
+   "tip":"「たら」完成后或假定；「なら」承接对方的话题；「ても」即使……也。ば形从辞书形变：う段→え段＋ば。"},
+  {"id":"gyaku", "label":"逆接 のに・けれど",  "re":r"のに（逆接）|けれど|だけど",
+   "tip":"「のに」明明……却（带不满、意外）；「けれど／だけど」是一般的转折，名词、な形容词后要加「だ」。"},
+  {"id":"ndesu", "label":"〜んです",          "re":r"んです",
+   "tip":"「のです／んです」前接普通形，名词、な形容词现在肯定加「な」；用来说明情况或追问原因。「〜たいんですが」用来委婉地引出请求。"},
+  {"id":"sugiru","label":"〜すぎる",          "re":r"すぎる",
+   "tip":"动词去ます、い形容词去い，再接「すぎる」，表示过度。"},
+]
+def load_quiz():
+    if not os.path.exists("quiz_src.txt"):
+        return None
+    detail = {}
+    for r in rows("语法逐题明细"):
+        m = re.search(r"第(\d+)题", str(r.get("题号", "")))
+        if m:
+            detail[(str(r["考试年月"]), int(m.group(1)))] = r
+    items, skipped = [], []
+    for line in open("quiz_src.txt", encoding="utf-8"):
+        line = line.rstrip("\n")
+        if not line.strip() or line.startswith("#"):
+            continue
+        ym, n, a, fl, stem, *opts = line.split("|")
+        n, a = int(n), int(a)
+        if fl.startswith("skip:"):
+            skipped.append({"ym": ym, "n": n, "why": fl[5:]})
+            continue
+        assert len(opts) == 4 and all(opts) and 1 <= a <= 4 and "（　）" in stem, line
+        d = detail.get((ym, n), {})
+        pt = d.get("日语考点", "")
+        items.append({"id": f"{ym}-{n}", "ym": ym, "n": n, "s": stem.replace("⏎", "\n"), "o": opts, "a": a,
+                      "pt": pt, "ex": d.get("中文解释", ""), "src": d.get("来源", ""),
+                      "fl": 1 if fl == "ocr" else 0, "c": [c["id"] for c in CATS if re.search(c["re"], pt)]})
+    cats = []
+    for c in CATS:
+        k = sum(1 for it in items if c["id"] in it["c"])
+        if k:
+            cats.append({"id": c["id"], "label": c["label"], "tip": c["tip"], "n": k})
+    exams = sorted(set(it["ym"] for it in items))
+    nocr = sum(it["fl"] for it in items)
+    total = len(items) + len(skipped)
+    fmt = lambda ym: f"{ym[:4]}/{ym[4:]}"
+    notes = [
+        f"题库收录 {len(items)} / {total} 道文法問題1 单选题，来自 {len(exams)} 场新版 {lv} 真题，题干和选项按识别文本人工整理。",
+        "答案是根据题干和选项判断的，并与现有参考答案中能辨认的部分核对一致；不是官方公布的答案。",
+        f"其中 {nocr} 道标有「OCR 修复」：识别文本有错字或缺字，按上下文修正过，个别人名、机构名用〇〇代替，可能与原卷略有出入。",
+    ]
+    if skipped:
+        notes.append("未收录 " + str(len(skipped)) + " 道：" + "；".join(f"{fmt(x['ym'])} 第{x['n']}题（{x['why']}）" for x in skipped) + "。")
+    notes.append("考点和解析取自「语法逐题」表；弱项分类按考点名称自动归类。")
+    print(f"quiz: {len(items)} items, {len(skipped)} skipped, {nocr} ocr-fixed; cats:", [(c['label'], c['n']) for c in cats])
+    return {"intro": f"从 {len(exams)} 场新版 {lv} 真题的文法問題1（单选）里随机抽题，共 {len(items)} 道。答完马上看正确答案、考点和解析。",
+            "items": items, "cats": cats, "notes": notes}
+quiz = load_quiz()
+if quiz:
+    data["_quiz"] = quiz
+    TABS.insert(0, {"id": "renshuu", "label": "小练习", "kind": "quiz"})
 print(f"{lv}: 笔试 {bishi_n} 场, 听力 {choukai_n} 场, 旧题 {kyuu_n} 场")
 
 payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
@@ -44,16 +114,19 @@ TEMPLATE = r'''<title>__LEVEL__ 高频词汇与考点</title>
   --bg:#f3f5f8; --surface:#ffffff; --fg:#1a2130; --muted:#66718a;
   --line:#dce2eb; --accent:#2f4f80; --accent-soft:#e6ecf6; --on-accent:#ffffff;
   --seg:#cfd7e4; --mark:#fff0a3; --quote:#f3f5f8;
+  --ok:#1c7548; --ok-soft:#e3f3ea; --bad:#b0352d; --bad-soft:#fbe9e7;
   --font-ui:"BIZ UDPGothic","Hiragino Sans","PingFang SC","Noto Sans JP","Noto Sans CJK JP",system-ui,sans-serif;
   --font-jp:"Shippori Mincho","Hiragino Mincho ProN","Yu Mincho","Noto Serif JP","Noto Serif CJK JP","Songti SC",serif;
   --font-zh:"PingFang SC","Hiragino Sans GB","Noto Sans SC","Noto Sans CJK SC","Microsoft YaHei",var(--font-ui);
 }
 @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
   --bg:#11151d; --surface:#1a2029; --fg:#e7eaf0; --muted:#98a3b8; --line:#2c3545;
-  --accent:#8fb0e6; --accent-soft:#22304a; --on-accent:#0f1420; --seg:#334057; --mark:#6b5a12; --quote:#131822; color-scheme:dark } }
+  --accent:#8fb0e6; --accent-soft:#22304a; --on-accent:#0f1420; --seg:#334057; --mark:#6b5a12; --quote:#131822;
+  --ok:#74d19c; --ok-soft:#15301f; --bad:#f18c82; --bad-soft:#3a1c19; color-scheme:dark } }
 :root[data-theme="dark"]{
   --bg:#11151d; --surface:#1a2029; --fg:#e7eaf0; --muted:#98a3b8; --line:#2c3545;
-  --accent:#8fb0e6; --accent-soft:#22304a; --on-accent:#0f1420; --seg:#334057; --mark:#6b5a12; --quote:#131822; color-scheme:dark }
+  --accent:#8fb0e6; --accent-soft:#22304a; --on-accent:#0f1420; --seg:#334057; --mark:#6b5a12; --quote:#131822;
+  --ok:#74d19c; --ok-soft:#15301f; --bad:#f18c82; --bad-soft:#3a1c19; color-scheme:dark }
 
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
@@ -142,6 +215,40 @@ tr:last-child td{border-bottom:0}
 .srcs .it .u{color:var(--accent);font-size:12px}
 .srcs .it .f{grid-column:1/-1;overflow-wrap:anywhere}
 .srcs .it .d{grid-column:1/-1;color:var(--muted);font-size:12px}
+.qz{display:flex;flex-direction:column;gap:10px}
+.qz-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;display:flex;flex-direction:column;gap:12px}
+.qz-card h2{margin:0;font-size:18px}
+.qz-card .lead{margin:0;color:var(--muted);font-size:13px}
+.qz-card .note{margin:0}
+.qz .chips{flex-wrap:wrap;overflow:visible}
+.chip:disabled{opacity:.45;cursor:default}
+.qz-go{border:0;background:var(--accent);color:var(--on-accent);font:inherit;font-size:16px;font-weight:700;border-radius:12px;padding:13px;cursor:pointer}
+.qz-go.ghost{background:transparent;color:var(--accent);border:1px solid var(--line);font-weight:400;font-size:15px}
+.qz-go:focus-visible,.qz-opt:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.qz-top{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+.qz-top button{border:0;background:transparent;color:var(--accent);font:inherit;font-size:13px;padding:4px 0;cursor:pointer}
+.qz-prog{width:100%;height:6px}
+.qz-stem{font-family:var(--font-jp);font-size:19px;line-height:1.75;font-weight:600;overflow-wrap:anywhere}
+.qz-stem.small{font-size:16px}
+.blank{color:var(--accent);white-space:nowrap}
+.blank.filled{border-bottom:2px solid var(--accent);padding:0 4px;white-space:normal}
+.qz-opts{display:flex;flex-direction:column;gap:8px}
+.qz-opt{display:flex;gap:12px;align-items:baseline;text-align:left;width:100%;border:1px solid var(--line);background:var(--surface);color:var(--fg);font:inherit;border-radius:12px;padding:12px 14px;cursor:pointer}
+.qz-opt b{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto}
+.qz-opt span{font-family:var(--font-jp);font-size:18px;font-weight:600;min-width:0;overflow-wrap:anywhere}
+.qz-opts.done .qz-opt{cursor:default}
+.qz-opt.is-ok{border-color:var(--ok);background:var(--ok-soft)}
+.qz-opt.is-ok b{color:var(--ok)}
+.qz-opt.is-bad{border-color:var(--bad);background:var(--bad-soft)}
+.qz-opt.is-bad b{color:var(--bad)}
+.qz-exp{border:1px solid var(--ok);background:var(--ok-soft);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px;font-size:14px}
+.qz-exp.bad{border-color:var(--bad);background:var(--bad-soft)}
+.qz-exp .verdict{font-weight:700;color:var(--ok);font-size:15px}
+.qz-exp.bad .verdict{color:var(--bad)}
+.qz-score{display:flex;align-items:baseline;gap:8px}
+.qz-score b{font-size:40px;line-height:1;font-variant-numeric:tabular-nums}
+.qz-score span{color:var(--muted)}
+.qz-actions{display:flex;flex-direction:column;gap:8px}
 .fab{position:fixed;right:max(14px,env(safe-area-inset-right,0px));bottom:calc(14px + env(safe-area-inset-bottom,0px));width:42px;height:42px;border-radius:50%;border:1px solid var(--line);background:var(--surface);color:var(--accent);box-shadow:0 2px 10px rgba(0,0,0,.14);font-size:18px;cursor:pointer;z-index:8}
 @media (prefers-reduced-motion:no-preference){.card-body{animation:fade .16s ease}@keyframes fade{from{opacity:0}to{opacity:1}}}
 </style>
@@ -173,10 +280,11 @@ tr:last-child td{border-bottom:0}
 'use strict';
 var DATA = JSON.parse(document.getElementById('n4-data').textContent);
 var TABS = __TABS__;
+var LEVEL = '__LEVEL__';
 var POS_ORDER = ['名词','动词','形容词','形容动词','副词','时间','疑问词','表达','词汇'];
 var CHUNK = 400;
 
-var state = { tab: TABS[0].id, q: '', f: {} };
+var state = { tab: (TABS.filter(function(t){ return t.kind!=='quiz'; })[0] || TABS[0]).id, q: '', f: {} };
 TABS.forEach(function(t){ state.f[t.id] = {pos:'全部', min:0, sort:'freq', year:'全部', point:'全部'}; });
 
 var $ = function(id){ return document.getElementById(id); };
@@ -236,7 +344,7 @@ function countQ(t){
 /* ---------- tabs ---------- */
 function renderTabs(){
   elTabs.innerHTML = TABS.map(function(t){
-    var c = t.kind==='info' ? '' : '<span class="c">'+countQ(t)+'</span>';
+    var c = (t.kind==='info' || t.kind==='quiz') ? '' : '<span class="c">'+countQ(t)+'</span>';
     return '<button class="tab" role="tab" type="button" data-tab="'+t.id+'" aria-selected="'+(t.id===state.tab)+'">'+esc(t.label)+c+'</button>';
   }).join('');
   var sel = elTabs.querySelector('[aria-selected="true"]');
@@ -355,7 +463,7 @@ function renderList(t){
     + (rows.length ? '<span><button type="button" data-expand="1">全部展开</button><button type="button" data-expand="0">收起</button></span>' : '');
   pendingItems = [];
   if(!rows.length){
-    var others = state.q.trim() ? TABS.filter(function(o){ return o.kind!=='info' && o.id!==t.id && countQ(o)>0; }) : [];
+    var others = state.q.trim() ? TABS.filter(function(o){ return o.kind!=='info' && o.kind!=='quiz' && o.id!==t.id && countQ(o)>0; }) : [];
     elList.innerHTML = '<div class="empty">没有匹配的条目。试试换个关键词或放宽筛选。'
       + (others.length ? '<div style="margin-top:12px">其他分类中有匹配：<br>'+others.map(function(o){ return '<button class="link" type="button" data-goto="'+o.id+'">'+esc(o.label)+' '+countQ(o)+'</button>'; }).join('')+'</div>' : '')
       + '</div>';
@@ -386,6 +494,7 @@ function renderInfo(){
     + sc.headers.map(function(x){ return '<th>'+esc(x)+'</th>'; }).join('') + '</tr></thead><tbody>'
     + sc.rows.map(function(r){ return '<tr>'+sc.headers.map(function(k,i){ return '<td>'+esc(i===0?fmtYM(r[k]):r[k])+'</td>'; }).join('')+'</tr>'; }).join('')
     + '</tbody></table></div>';
+  if(QUIZ) h += '<h2>小练习题库</h2><div class="kv">' + QUIZ.notes.map(function(x){ return '<div class="it"><span class="zh">'+esc(x)+'</span></div>'; }).join('') + '</div>';
   if(ly) h += '<h2>材料来源</h2><p class="lead">'+esc(ly.subtitle)+'</p><div class="srcs">'
     + ly.rows.map(function(r){ return '<div class="it"><span class="ym">'+esc(fmtYM(r['考试年月']))+'</span><span class="u">'+esc(r['用途'])+'</span><span class="f">'+esc(r['文件名'])+(r['页码范围']!=null?' · 第 '+esc(r['页码范围'])+' 页':'')+'</span><span class="d zh">'+esc(r['计数说明'])+'</span></div>'; }).join('')
     + '</div>';
@@ -393,9 +502,134 @@ function renderInfo(){
   elList.innerHTML = h;
 }
 
+/* ---------- quiz (小练习) ---------- */
+var QUIZ = DATA._quiz || null;
+var KEY_WRONG = 'jlpt-'+LEVEL+'-quiz-wrong', KEY_STAT = 'jlpt-'+LEVEL+'-quiz-stat';
+var qz = { scope:'all', n:10, run:null };
+function lsGet(k, d){ try{ var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch(e){ return d; } }
+function lsSet(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+function catById(id){ for(var i=0;i<QUIZ.cats.length;i++) if(QUIZ.cats[i].id===id) return QUIZ.cats[i]; return null; }
+function qPool(scope){
+  var items = QUIZ.items;
+  if(scope==='all') return items;
+  if(scope==='weak') return items.filter(function(x){ return x.c.length; });
+  if(scope==='wrong'){ var w = lsGet(KEY_WRONG, {}); return items.filter(function(x){ return w[x.id]; }); }
+  return items.filter(function(x){ return x.c.indexOf(scope)>=0; });
+}
+function shuffle(a){ for(var i=a.length-1;i>0;i--){ var j=Math.floor(Math.random()*(i+1)); var t=a[i]; a[i]=a[j]; a[j]=t; } return a; }
+function qStart(list){
+  var pool = list ? shuffle(list.slice()) : shuffle(qPool(qz.scope).slice());
+  var n = list ? pool.length : (qz.n===0 ? pool.length : Math.min(qz.n, pool.length));
+  if(!n) return;
+  qz.run = { items: pool.slice(0,n), i:0, picked:0, log:[], scope: list ? 'retry' : qz.scope };
+  renderQuiz(); window.scrollTo(0,0);
+}
+function stemHtml(it, fill){
+  var parts = String(it.s).split('（　）'), ans = String(it.o[it.a-1]).split('／'), h = '';
+  for(var i=0;i<parts.length;i++){
+    h += esc(parts[i]).replace(/\n/g,'<br>');
+    if(i<parts.length-1) h += fill ? '<span class="blank filled">'+esc(ans[Math.min(i,ans.length-1)])+'</span>' : '<span class="blank">（　　）</span>';
+  }
+  return h;
+}
+function quizSetupHtml(){
+  var all = QUIZ.items.length, weak = qPool('weak').length, wrong = qPool('wrong').length, st = lsGet(KEY_STAT, {done:0, right:0});
+  if(qz.scope==='wrong' && !wrong) qz.scope = 'all';
+  var pool = qPool(qz.scope).length, take = qz.n===0 ? pool : Math.min(qz.n, pool);
+  return '<div class="qz"><div class="qz-card">'
+    + '<h2>真题小练习</h2><p class="lead">'+esc(QUIZ.intro)+'</p>'
+    + chipsRow('范围', chip('全部真题', qz.scope==='all', 'data-qscope="all"', all) + chip('我的弱项', qz.scope==='weak', 'data-qscope="weak"', weak) + chip('错题本', qz.scope==='wrong', 'data-qscope="wrong"'+(wrong?'':' disabled'), wrong))
+    + chipsRow('弱项', QUIZ.cats.map(function(c){ return chip(c.label, qz.scope===c.id, 'data-qscope="'+c.id+'"', c.n); }).join(''))
+    + chipsRow('题数', [5,10,15,0].map(function(n){ return chip(n ? n+' 题' : '全部', qz.n===n, 'data-qn="'+n+'"'); }).join(''))
+    + '<button class="qz-go" type="button" data-qstart>开始练习（'+take+' 题）</button>'
+    + '<p class="note">'+(st.done ? '累计做过 '+st.done+' 题，答对 '+st.right+' 题（'+Math.round(st.right/st.done*100)+'%）。' : '')
+    + '答错的题会自动进错题本，在错题本里答对后移出。记录只保存在这台设备的浏览器里。</p>'
+    + '</div></div>';
+}
+function quizQuestionHtml(){
+  var r = qz.run, it = r.items[r.i], done = r.picked>0, ok = done && r.picked===it.a;
+  var h = '<div class="qz"><div class="qz-card">'
+    + '<div class="qz-top"><span>第 '+(r.i+1)+' / '+r.items.length+' 题</span><button type="button" data-qquit>结束练习</button></div>'
+    + '<span class="track qz-prog" aria-hidden="true"><i style="width:'+((r.i+(done?1:0))/r.items.length*100).toFixed(1)+'%"></i></span>'
+    + '<div class="eyebrow">'+esc(fmtYM(it.ym))+' · 文法問題1 · 第'+it.n+'题</div>'
+    + '<div class="qz-stem" lang="ja">'+stemHtml(it, done)+'</div>'
+    + '<div class="qz-opts'+(done?' done':'')+'">' + it.o.map(function(o, k){
+        var n = k+1, cls = 'qz-opt';
+        if(done){ if(n===it.a) cls += ' is-ok'; else if(n===r.picked) cls += ' is-bad'; }
+        return '<button class="'+cls+'" type="button" data-qopt="'+n+'"><b>'+n+'</b><span lang="ja">'+esc(o)+'</span></button>';
+      }).join('') + '</div>';
+  if(done){
+    var tip = ''; for(var i=0;i<it.c.length;i++){ var c = catById(it.c[i]); if(c && c.tip){ tip = c.tip; break; } }
+    h += '<div class="qz-exp '+(ok?'ok':'bad')+'">'
+      + '<div class="verdict">'+(ok?'答对了':'答错了')+' · 正确答案 '+it.a+'　<span lang="ja">'+esc(it.o[it.a-1])+'</span></div>'
+      + row('考点', '<span class="ttl" lang="ja">'+esc(it.pt)+'</span>')
+      + row('解析', '<span class="zh">'+esc(it.ex)+'</span>')
+      + (tip ? row('提示', '<span class="zh">'+esc(tip)+'</span>') : '')
+      + '<div class="src">'+esc(it.src)+(it.fl ? ' · 本题文字经 OCR 修复，可能与原卷略有出入' : '')+'</div>'
+      + '</div>'
+      + '<button class="qz-go" type="button" data-qnext>'+(r.i+1<r.items.length ? '下一题' : '看结果')+'</button>';
+  }
+  return h + '</div></div>';
+}
+function quizResultHtml(){
+  var r = qz.run, total = r.log.length, wrong = r.log.filter(function(x){ return !x.ok; }), right = total - wrong.length;
+  var h = '<div class="qz"><div class="qz-card">'
+    + '<h2>练习结果</h2>'
+    + '<div class="qz-score"><b>'+right+'</b><span>/ '+total+' 题答对</span></div>'
+    + (total ? '<span class="track qz-prog" aria-hidden="true"><i style="width:'+(right/total*100).toFixed(1)+'%"></i></span>' : '')
+    + (total && !wrong.length ? '<p class="lead">这一组全部答对。</p>' : '')
+    + '<div class="qz-actions"><button class="qz-go" type="button" data-qagain>再来一组</button>'
+    + (wrong.length ? '<button class="qz-go ghost" type="button" data-qretry>重做这 '+wrong.length+' 道错题</button>' : '')
+    + '<button class="qz-go ghost" type="button" data-qsetup>返回设置</button></div>'
+    + '</div>';
+  if(wrong.length){
+    h += '<div class="group-h"><b>这次答错的题</b><span>'+wrong.length+' 道，已加入错题本</span></div>'
+      + wrong.map(function(x){ var it = x.it; return '<div class="qz-card">'
+        + '<div class="eyebrow">'+esc(fmtYM(it.ym))+' · 文法問題1 · 第'+it.n+'题</div>'
+        + '<div class="qz-stem small" lang="ja">'+stemHtml(it, true)+'</div>'
+        + '<div class="src">你选的是 '+x.picked+'　<span lang="ja">'+esc(it.o[x.picked-1])+'</span></div>'
+        + row('考点', '<span><span lang="ja">'+esc(it.pt)+'</span>　<span class="zh">'+esc(it.ex)+'</span></span>')
+        + '</div>'; }).join('');
+  }
+  return h + '</div>';
+}
+function renderQuiz(){
+  elFilters.innerHTML = ''; elBar.innerHTML = '';
+  var r = qz.run;
+  elList.innerHTML = !r ? quizSetupHtml() : (r.i >= r.items.length ? quizResultHtml() : quizQuestionHtml());
+}
+function qPick(n){
+  var r = qz.run; if(!r || r.picked || r.i >= r.items.length) return;
+  var it = r.items[r.i], ok = n===it.a; r.picked = n;
+  r.log.push({it:it, picked:n, ok:ok});
+  var st = lsGet(KEY_STAT, {done:0, right:0}); st.done++; if(ok) st.right++; lsSet(KEY_STAT, st);
+  var w = lsGet(KEY_WRONG, {});
+  if(!ok){ w[it.id] = (w[it.id]||0)+1; lsSet(KEY_WRONG, w); }
+  else if(r.scope==='wrong' && w[it.id]){ delete w[it.id]; lsSet(KEY_WRONG, w); }
+  renderQuiz();
+  var e = elList.querySelector('[data-qnext]'); if(e && e.scrollIntoView){ try{ e.scrollIntoView({block:'nearest', behavior:'smooth'}); }catch(err){} }
+}
+function quizClick(e){
+  var b = e.target.closest('button'); if(!b) return;
+  var d = b.dataset, r = qz.run;
+  if(d.qscope!=null){ if(!b.disabled){ qz.scope = d.qscope; renderQuiz(); } }
+  else if(d.qn!=null){ qz.n = +d.qn; renderQuiz(); }
+  else if(d.qstart!=null || d.qagain!=null){ qStart(); }
+  else if(d.qopt!=null){ qPick(+d.qopt); }
+  else if(d.qnext!=null){ if(r){ r.i++; r.picked = 0; renderQuiz(); window.scrollTo(0,0); } }
+  else if(d.qretry!=null){ if(r) qStart(r.log.filter(function(x){ return !x.ok; }).map(function(x){ return x.it; })); }
+  else if(d.qsetup!=null){ qz.run = null; renderQuiz(); window.scrollTo(0,0); }
+  else if(d.qquit!=null){
+    if(r && r.log.length){ r.items = r.items.slice(0, r.log.length); r.i = r.items.length; } else { qz.run = null; }
+    renderQuiz(); window.scrollTo(0,0);
+  }
+}
+
 function render(){
   var t = tabById(state.tab) || TABS[0];
-  renderTabs(); renderFilters(t); renderList(t);
+  renderTabs();
+  if(t.kind==='quiz'){ renderQuiz(); return; }
+  renderFilters(t); renderList(t);
 }
 
 /* ---------- events ---------- */
@@ -426,6 +660,7 @@ elFilters.addEventListener('click', function(e){
   var t = tabById(state.tab); renderFilters(t); renderList(t);
 });
 elList.addEventListener('click', function(e){
+  if((tabById(state.tab)||{}).kind==='quiz'){ quizClick(e); return; }
   var g = e.target.closest('[data-goto]'); if(g){ goTab(g.dataset.goto); return; }
   if(e.target.closest('[data-more]')){ appendChunk(); return; }
   var b = e.target.closest('.card-head'); if(!b) return;
